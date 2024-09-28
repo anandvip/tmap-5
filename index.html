@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Advanced Mind Mapping Tool</title>
+    <style>
+        body, html { margin: 0; padding: 0; font-family: Arial, sans-serif; height: 100%; overflow: hidden; }
+        #app-container { display: flex; height: 100%; }
+        #sessions-panel { width: 250px; background-color: #2c3e50; color: #ecf0f1; padding: 10px; overflow-y: auto; }
+        #sessions-list { list-style-type: none; padding: 0; }
+        #sessions-list li { display: flex; justify-content: space-between; align-items: center; padding: 10px; margin: 5px 0; background-color: #34495e; cursor: pointer; border-radius: 4px; }
+        #sessions-list li:hover { background-color: #3b5998; }
+        #main-area { flex: 1; display: flex; flex-direction: column; }
+        #toolbar { background-color: #2c3e50; padding: 10px; display: flex; flex-wrap: wrap; }
+        #toolbar button { margin-right: 10px; margin-bottom: 5px; padding: 10px; background-color: #34495e; border: none; color: #ecf0f1; cursor: pointer; border-radius: 4px; }
+        #toolbar button:hover { background-color: #3b5998; }
+        #main-container { flex: 1; display: flex; overflow: hidden; }
+        #mind-map-container { position: relative; flex: 1; background-color: #ecf0f1; overflow: auto; }
+        #mind-map-content { position: absolute; min-width: 100%; min-height: 100%; }
+        #narrative-panel { width: 300px; background-color: #f0f0f0; display: flex; flex-direction: column; }
+        #narrative-order { list-style-type: none; padding: 10px; margin: 0; flex: 1; overflow-y: auto; }
+        #narrative-order li { background-color: #ddd; margin: 5px 0; padding: 5px; cursor: move; border: 1px solid #bdc3c7; border-radius: 4px; }
+        .node { position: absolute; min-width: 100px; padding: 10px; background-color: #3498db; color: #fff; border-radius: 5px; cursor: move; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .node.selected { border: 2px solid #e74c3c; }
+        .node .node-text { outline: none; }
+        svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #narrative-output-container { position: relative; }
+        #narrative-output { height: 150px; resize: none; border: none; padding: 10px 30px 10px 10px; font-size: 14px; background-color: #fff; border-top: 1px solid #bdc3c7; width: 100%; box-sizing: border-box; }
+        #copy-btn { position: absolute; right: 10px; bottom: 10px; background-color: #3498db; color: white; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+        #copy-btn:hover { background-color: #2980b9; }
+        #add-node-btn { position: fixed; right: 320px; bottom: 170px; width: 50px; height: 50px; border-radius: 50%; background-color: #2ecc71; color: white; font-size: 24px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 1001; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        #stack-nodes-btn { background-color: #e74c3c; }
+        .delete-session { color: #e74c3c; cursor: pointer; }
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; }
+        .toast { background-color: #333; color: #fff; padding: 10px 20px; border-radius: 4px; margin-top: 10px; opacity: 0; transition: opacity 0.3s ease-in-out; }
+        .toast.action { display: flex; justify-content: space-between; align-items: center; }
+        .toast .action-btn { background-color: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 10px; }
+      button#stack-nodes-btn {
+    background-color: red;
+}
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <aside id="sessions-panel">
+            <h3>Recent Sessions</h3>
+            <ul id="sessions-list"></ul>
+        </aside>
+        <div id="main-area">
+            <div id="toolbar">
+                <button id="new-session-btn">New Session</button>
+                <button id="delete-nodes-btn">Delete Selected</button>
+                <button id="connect-nodes-btn">Connect Nodes</button>
+                <button id="stack-nodes-btn">Stack Nodes</button>
+                <button id="generate-narrative-btn">Generate Narrative</button>
+                <button id="save-session-btn">Save Session</button>
+            </div>
+            <div id="main-container">
+                <div id="mind-map-container">
+                    <div id="mind-map-content"></div>
+                </div>
+                <div id="narrative-panel">
+                    <h3 style="padding: 10px; margin: 0;">Narrative Order</h3>
+                    <ul id="narrative-order"></ul>
+                </div>
+            </div>
+            <div id="narrative-output-container">
+                <textarea id="narrative-output" placeholder="Generated narrative will appear here..." readonly></textarea>
+                <button id="copy-btn" title="Copy to clipboard">📋</button>
+            </div>
+        </div>
+    </div>
+    <button id="add-node-btn">+</button>
+    <div id="toast-container"></div>
+
+    <script>
+    (() => {
+        const $ = document.querySelector.bind(document);
+        const $$ = document.querySelectorAll.bind(document);
+        const create = (tag, attrs = {}) => {
+            const el = document.createElement(tag);
+            Object.entries(attrs).forEach(([key, value]) => {
+                if (key === 'dataset') {
+                    Object.entries(value).forEach(([dataKey, dataValue]) => {
+                        el.dataset[dataKey] = dataValue;
+                    });
+                } else if (key === 'style' && typeof value === 'object') {
+                    Object.assign(el.style, value);
+                } else {
+                    el[key] = value;
+                }
+            });
+            return el;
+        };
+
+        const container = $('#mind-map-content');
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        container.appendChild(svg);
+
+        let nodes = [], connections = [], selectedNodes = new Set(), isConnecting = false, connectionStartNode = null, nodeIdCounter = 0, currentSessionId = null;
+
+        const showToast = (message, duration = 3000, action = null) => {
+            const toast = create('div', { className: action ? 'toast action' : 'toast' });
+            toast.appendChild(create('span', { textContent: message }));
+            
+            if (action) {
+                const actionBtn = create('button', { 
+                    className: 'action-btn',
+                    textContent: action.text,
+                    onclick: () => {
+                        action.callback();
+                        toast.remove();
+                    }
+                });
+                toast.appendChild(actionBtn);
+            }
+            
+            $('#toast-container').appendChild(toast);
+            setTimeout(() => { toast.style.opacity = 1; }, 10);
+            setTimeout(() => {
+                toast.style.opacity = 0;
+                setTimeout(() => { toast.remove(); }, 300);
+            }, duration);
+        };
+
+        const saveSession = () => {
+            const sessionData = {
+                id: currentSessionId || Date.now().toString(),
+                nodes: nodes.map(node => ({
+                    id: node.dataset.nodeId,
+                    x: parseInt(node.style.left),
+                    y: parseInt(node.style.top),
+                    text: node.querySelector('.node-text').textContent
+                })),
+                connections: connections.map(({from, to}) => ({
+                    from: from.dataset.nodeId,
+                    to: to.dataset.nodeId
+                })),
+                nodeIdCounter
+            };
+
+            let sessions = JSON.parse(localStorage.getItem('mindMapSessions')) || [];
+            const existingIndex = sessions.findIndex(s => s.id === sessionData.id);
+            existingIndex !== -1 ? sessions[existingIndex] = sessionData : sessions.unshift(sessionData);
+            sessions = sessions.slice(0, 10);
+            localStorage.setItem('mindMapSessions', JSON.stringify(sessions));
+            currentSessionId = sessionData.id;
+            updateSessionsList();
+            showToast('Session saved successfully');
+        };
+
+        const loadSession = (sessionId) => {
+            const sessions = JSON.parse(localStorage.getItem('mindMapSessions')) || [];
+            const session = sessions.find(s => s.id === sessionId);
+            if (session) {
+                clearAll();
+                nodeIdCounter = session.nodeIdCounter;
+                session.nodes.forEach(({x, y, text, id}) => createNode(x, y, text, id));
+                session.connections.forEach(({from, to}) => {
+                    const fromNode = nodes.find(n => n.dataset.nodeId == from);
+                    const toNode = nodes.find(n => n.dataset.nodeId == to);
+                    if (fromNode && toNode) createConnection(fromNode, toNode);
+                });
+                updateConnections();
+                updateNarrativeOrder();
+                currentSessionId = sessionId;
+                showToast('Session loaded successfully');
+            }
+        };
+
+        const updateSessionsList = () => {
+            const sessions = JSON.parse(localStorage.getItem('mindMapSessions')) || [];
+            $('#sessions-list').innerHTML = sessions.map(session => `
+                <li data-session-id="${session.id}">
+                    ${session.nodes[0]?.text.substring(0, 20) || 'Empty Session'}
+                    <span class="delete-session">❌</span>
+                </li>
+            `).join('');
+        };
+
+        const createNode = (x, y, text = "New Node", id = null) => {
+            const node = create('div', {
+                className: 'node',
+                style: {left: `${x}px`, top: `${y}px`},
+                dataset: {nodeId: id || nodeIdCounter++},
+                innerHTML: `<div class="node-text" contenteditable="true">${text}</div>`
+            });
+
+            node.addEventListener('mousedown', onNodeMouseDown);
+            node.addEventListener('click', onNodeClick);
+            node.querySelector('.node-text').addEventListener('input', () => {
+                updateNarrativeOrder();
+                saveSession();
+            });
+
+            container.appendChild(node);
+            nodes.push(node);
+            addToNarrativeOrder(node);
+            updateContainerSize();
+            return node;
+        };
+
+        const updateContainerSize = () => {
+            const maxX = Math.max(...nodes.map(node => parseInt(node.style.left) + node.offsetWidth));
+            const maxY = Math.max(...nodes.map(node => parseInt(node.style.top) + node.offsetHeight));
+            container.style.width = `${Math.max(maxX + 100, $('#mind-map-container').clientWidth)}px`;
+            container.style.height = `${Math.max(maxY + 100, $('#mind-map-container').clientHeight)}px`;
+            svg.setAttribute('width', container.style.width);
+            svg.setAttribute('height', container.style.height);
+        };
+
+        const onNodeMouseDown = (e) => {
+            if (e.target.classList.contains('node-text')) return;
+            e.preventDefault();
+            const node = e.currentTarget;
+            const startX = e.clientX - parseInt(node.style.left);
+            const startY = e.clientY - parseInt(node.style.top);
+
+            const onMouseMove = (e) => {
+                node.style.left = `${e.clientX - startX}px`;
+                node.style.top = `${e.clientY - startY}px`;
+                updateConnections();
+                updateContainerSize();
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                saveSession();
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        const onNodeClick = (e) => {
+            e.stopPropagation();
+            const node = e.currentTarget;
+
+            if (isConnecting) {
+                if (!connectionStartNode) {
+                    connectionStartNode = node;
+                    node.classList.add('selected');
+                } else if (connectionStartNode !== node) {
+                    createConnection(connectionStartNode, node);
+                    connectionStartNode.classList.remove('selected');
+                    connectionStartNode = null;
+                    isConnecting = false;
+                    showToast('Nodes connected');
+                }
+            } else {
+                toggleNodeSelection(node);
+            }
+        };
+
+        const toggleNodeSelection = (node) => {
+            selectedNodes.has(node) ? selectedNodes.delete(node) : selectedNodes.add(node);
+            node.classList.toggle('selected');
+        };
+
+        const createConnection = (nodeA, nodeB) => {
+            connections.push({from: nodeA, to: nodeB});
+            updateConnections();
+            saveSession();
+        };
+
+        const updateConnections = () => {
+            svg.innerHTML = '';
+            connections.forEach(({from, to}) => {
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                const fromRect = from.getBoundingClientRect();
+                const toRect = to.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+
+                Object.assign(line, {
+                    x1: fromRect.left + fromRect.width / 2 - containerRect.left,
+                    y1: fromRect.top + fromRect.height / 2 - containerRect.top,
+                    x2: toRect.left + toRect.width / 2 - containerRect.left,
+                    y2: toRect.top + toRect.height / 2 - containerRect.top,
+                });
+
+                line.setAttribute("stroke", "#7f8c8d");
+                line.setAttribute("stroke-width", "2");
+
+                svg.appendChild(line);
+            });
+        };
+
+       const addToNarrativeOrder = (node) => {
+            const li = create('li', {
+                textContent: node.querySelector('.node-text').textContent,
+                draggable: true,
+                dataset: {nodeId: node.dataset.nodeId}
+            });
+
+            li.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', li.dataset.nodeId));
+            li.addEventListener('dragover', e => e.preventDefault());
+            li.addEventListener('drop', e => {
+                e.preventDefault();
+                const draggedId = e.dataTransfer.getData('text/plain');
+                const draggedLi = $('#narrative-order').querySelector(`[data-node-id="${draggedId}"]`);
+                $('#narrative-order').insertBefore(draggedLi, e.clientY < li.offsetTop + li.offsetHeight / 2 ? li : li.nextSibling);
+                saveSession();
+            });
+
+            $('#narrative-order').appendChild(li);
+        };
+
+        const updateNarrativeOrder = () => {
+            $('#narrative-order').innerHTML = '';
+            nodes.forEach(node => addToNarrativeOrder(node));
+        };
+
+        const clearAll = () => {
+            nodes.forEach(node => node.remove());
+            nodes = [];
+            connections = [];
+            selectedNodes.clear();
+            nodeIdCounter = 0;
+            updateConnections();
+            updateNarrativeOrder();
+            $('#narrative-output').value = '';
+            $('#copy-btn').style.display = 'none';
+            updateContainerSize();
+        };
+
+        container.addEventListener('click', (e) => {
+            if (e.target === container) {
+                selectedNodes.forEach(node => node.classList.remove('selected'));
+                selectedNodes.clear();
+                if (isConnecting) {
+                    connectionStartNode.classList.remove('selected');
+                    connectionStartNode = null;
+                    isConnecting = false;
+                }
+            }
+        });
+
+        $('#add-node-btn').addEventListener('click', () => {
+            const rect = $('#mind-map-container').getBoundingClientRect();
+            const scrollLeft = $('#mind-map-container').scrollLeft;
+            const scrollTop = $('#mind-map-container').scrollTop;
+            const x = Math.random() * (rect.width - 150) + 50 + scrollLeft;
+            const y = Math.random() * (rect.height - 100) + 50 + scrollTop;
+            createNode(x, y);
+            showToast('New node added');
+        });
+
+        $('#new-session-btn').addEventListener('click', () => {
+            showToast('Start a new session?', 5000, {
+                text: 'Confirm',
+                callback: () => {
+                    clearAll();
+                    currentSessionId = null;
+                    saveSession();
+                    showToast('New session started');
+                }
+            });
+        });
+
+        $('#delete-nodes-btn').addEventListener('click', () => {
+            if (selectedNodes.size === 0) {
+                showToast('No nodes selected to delete');
+                return;
+            }
+            showToast('Delete selected nodes?', 5000, {
+                text: 'Confirm',
+                callback: () => {
+                    selectedNodes.forEach(node => {
+                        connections = connections.filter(conn => conn.from !== node && conn.to !== node);
+                        node.remove();
+                        nodes = nodes.filter(n => n !== node);
+                    });
+                    selectedNodes.clear();
+                    updateConnections();
+                    updateNarrativeOrder();
+                    updateContainerSize();
+                    saveSession();
+                    showToast('Selected nodes deleted');
+                }
+            });
+        });
+
+        $('#connect-nodes-btn').addEventListener('click', () => {
+            if (selectedNodes.size === 2) {
+                const [nodeA, nodeB] = selectedNodes;
+                createConnection(nodeA, nodeB);
+                selectedNodes.forEach(node => node.classList.remove('selected'));
+                selectedNodes.clear();
+                showToast('Nodes connected');
+            } else {
+                isConnecting = true;
+                showToast('Click on two nodes to connect them');
+            }
+        });
+
+        $('#stack-nodes-btn').addEventListener('click', () => {
+            let yOffset = 10;
+            nodes.forEach(node => {
+                node.style.left = '10px';
+                node.style.top = `${yOffset}px`;
+                yOffset += node.offsetHeight + 10;
+            });
+            updateConnections();
+            updateContainerSize();
+            saveSession();
+            showToast('Nodes stacked');
+        });
+
+        $('#generate-narrative-btn').addEventListener('click', () => {
+            const generateNarrativeForNode = (node, depth = 0) => {
+                let narrative = '  '.repeat(depth) + node.querySelector('.node-text').textContent + '\n';
+                const connectedNodes = connections
+                    .filter(conn => conn.from === node)
+                    .map(conn => conn.to);
+                connectedNodes.forEach(childNode => {
+                    narrative += generateNarrativeForNode(childNode, depth + 1);
+                });
+                return narrative;
+            };
+
+            const orderedNodes = Array.from($('#narrative-order').children).map(li => 
+                nodes.find(node => node.dataset.nodeId === li.dataset.nodeId)
+            );
+
+            let narrative = '';
+            orderedNodes.forEach(node => {
+                narrative += generateNarrativeForNode(node);
+            });
+
+            $('#narrative-output').value = narrative;
+            $('#copy-btn').style.display = narrative ? 'block' : 'none';
+            showToast('Narrative generated');
+        });
+
+        $('#save-session-btn').addEventListener('click', saveSession);
+
+        $('#copy-btn').addEventListener('click', () => {
+            const narrativeOutput = $('#narrative-output');
+            narrativeOutput.select();
+            document.execCommand('copy');
+            showToast('Narrative copied to clipboard');
+        });
+
+        $('#sessions-list').addEventListener('click', (e) => {
+            const sessionItem = e.target.closest('li');
+            if (sessionItem) {
+                if (e.target.classList.contains('delete-session')) {
+                    const sessionId = sessionItem.dataset.sessionId;
+                    showToast('Delete this session?', 5000, {
+                        text: 'Confirm',
+                        callback: () => {
+                            let sessions = JSON.parse(localStorage.getItem('mindMapSessions')) || [];
+                            sessions = sessions.filter(s => s.id !== sessionId);
+                            localStorage.setItem('mindMapSessions', JSON.stringify(sessions));
+                            updateSessionsList();
+                            if (sessionId === currentSessionId) {
+                                clearAll();
+                                currentSessionId = null;
+                            }
+                            showToast('Session deleted');
+                        }
+                    });
+                } else {
+                    loadSession(sessionItem.dataset.sessionId);
+                }
+            }
+        });
+
+        // Initialize the application
+        updateSessionsList();
+
+        // Load the most recent session or create a new one
+        const sessions = JSON.parse(localStorage.getItem('mindMapSessions')) || [];
+        if (sessions.length > 0) {
+            loadSession(sessions[0].id);
+        } else {
+            const rect = $('#mind-map-container').getBoundingClientRect();
+            createNode(rect.width / 2 - 50, rect.height / 2 - 25, "Start here");
+            showToast('Welcome! Start by editing the first node');
+        }
+
+        // Initially hide the copy button
+        $('#copy-btn').style.display = 'none';
+
+        // Adjust container size on window resize
+        window.addEventListener('resize', updateContainerSize);
+    })();
+    </script>
+</body>
+</html>
